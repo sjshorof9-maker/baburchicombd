@@ -12,7 +12,8 @@ interface LayoutProps {
 }
 
 const Layout: React.FC<LayoutProps> = ({ user, onLogout, children, activeTab, setActiveTab, logoUrl }) => {
-  const isAdmin = user.role === UserRole.ADMIN;
+  // Fix: UserRole does not have ADMIN, using SUPER_ADMIN based on types.ts
+  const isAdmin = user.role === UserRole.SUPER_ADMIN || user.role === UserRole.OWNER;
 
   const navItems = isAdmin 
     ? [

@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Product, Order, OrderStatus, User, OrderItem, Lead } from '../types';
+import { Product, Order, OrderStatus, User, OrderItem, Lead, CourierConfig } from '../types';
+import { fetchCustomerSuccessRate } from '../services/courierService';
 
 interface OrderFormProps {
   products: Product[];
@@ -8,9 +9,10 @@ interface OrderFormProps {
   onOrderCreate: (order: Order) => Promise<void>;
   leads?: Lead[];
   allOrders?: Order[];
+  courierConfig: CourierConfig;
 }
 
-const OrderForm: React.FC<OrderFormProps> = ({ products, currentUser, onOrderCreate, leads = [], allOrders = [] }) => {
+const OrderForm: React.FC<OrderFormProps> = ({ products, currentUser, onOrderCreate, leads = [], allOrders = [], courierConfig }) => {
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
@@ -20,51 +22,39 @@ const OrderForm: React.FC<OrderFormProps> = ({ products, currentUser, onOrderCre
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
-  
-  const [lookupData, setLookupData] = useState<{
-    status: 'none' | 'found-lead' | 'found-customer';
-    ltv: number;
-    orderCount: number;
-    isVip: boolean;
-  }>({ status: 'none', ltv: 0, orderCount: 0, isVip: false });
+  const [successRate, setSuccessRate] = useState<string | null>(null);
+  const [isLoadingRate, setIsLoadingRate] = useState(false);
 
-  const deliveryCharges = {
-    inside: 70,
-    outside: 130
-  };
+  const deliveryCharges = { inside: 70, outside: 130 };
 
   useEffect(() => {
-    const phone = customerPhone.trim();
-    if (phone.length >= 11) {
-      const customerOrders = allOrders.filter(o => o.customerPhone === phone);
-      
-      if (customerOrders.length > 0) {
-        const lastOrder = customerOrders[0];
-        if (!customerName) setCustomerName(lastOrder.customerName);
-        if (!customerAddress) setCustomerAddress(lastOrder.customerAddress);
-        
-        const ltv = customerOrders.reduce((sum, o) => sum + o.totalAmount, 0);
-        setLookupData({
-          status: 'found-customer',
-          ltv,
-          orderCount: customerOrders.length,
-          isVip: customerOrders.length >= 3 || ltv > 5000
-        });
+    const cleanPhone = customerPhone.replace(/[^\d]/g, '');
+    if (cleanPhone.length === 11) {
+      setIsLoadingRate(true);
+      fetchCustomerSuccessRate(cleanPhone, courierConfig).then(rate => {
+        setSuccessRate(rate);
+        setIsLoadingRate(false);
+      }).catch(() => {
+        setSuccessRate("N/A");
+        setIsLoadingRate(false);
+      });
+
+      const existingOrder = allOrders.find(o => o.customerPhone.replace(/[^\d]/g, '').slice(-11) === cleanPhone.slice(-11));
+      if (existingOrder) {
+        setCustomerName(existingOrder.customerName);
+        setCustomerAddress(existingOrder.customerAddress);
+        setDeliveryRegion(existingOrder.deliveryRegion === 'inside' ? 'inside' : 'outside');
         return;
       }
-
-      const matchLead = leads.find(l => l.phoneNumber.includes(phone));
-      if (matchLead) {
-        if (matchLead.customerName && !customerName) setCustomerName(matchLead.customerName);
-        if (matchLead.address && !customerAddress) setCustomerAddress(matchLead.address);
-        setLookupData({ status: 'found-lead', ltv: 0, orderCount: 0, isVip: false });
-      } else {
-        setLookupData({ status: 'none', ltv: 0, orderCount: 0, isVip: false });
+      const existingLead = leads.find(l => l.phoneNumber.replace(/[^\d]/g, '').slice(-11) === cleanPhone.slice(-11));
+      if (existingLead) {
+        if (existingLead.customerName) setCustomerName(existingLead.customerName);
+        if (existingLead.address) setCustomerAddress(existingLead.address);
       }
     } else {
-      setLookupData({ status: 'none', ltv: 0, orderCount: 0, isVip: false });
+      setSuccessRate(null);
     }
-  }, [customerPhone, leads, allOrders]);
+  }, [customerPhone, allOrders, leads, courierConfig]);
 
   const subtotal = useMemo(() => {
     return selectedItems.reduce((sum, item) => {
@@ -74,40 +64,34 @@ const OrderForm: React.FC<OrderFormProps> = ({ products, currentUser, onOrderCre
   }, [selectedItems, products]);
 
   const grandTotal = useMemo(() => {
-    return (subtotal + deliveryCharges[deliveryRegion]) - (advanceAmount || 0);
+    const total = subtotal + deliveryCharges[deliveryRegion];
+    return Math.max(0, total - (advanceAmount || 0));
   }, [subtotal, deliveryRegion, advanceAmount]);
-
-  const addItem = () => {
-    const available = products.find(p => p.stock > 0);
-    if (!available) {
-      alert("⚠️ স্টকে কোনো প্রোডাক্ট নেই!");
-      return;
-    }
-    setSelectedItems(prev => [...prev, { productId: available.id, quantity: 1 }]);
-  };
-
-  const updateItem = (index: number, productId: string, quantity: number) => {
-    const product = products.find(p => p.id === productId);
-    if (!product) return;
-
-    let finalQty = Math.max(1, quantity);
-    if (finalQty > product.stock) {
-      alert(`⚠️ Only ${product.stock} units available for ${product.name}`);
-      finalQty = product.stock;
-    }
-
-    const newItems = [...selectedItems];
-    newItems[index] = { productId, quantity: finalQty };
-    setSelectedItems(newItems);
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (selectedItems.length === 0 || isSubmitting) return;
+    
+    if (selectedItems.length === 0) {
+      alert("⚠️ অন্তত একটি প্রোডাক্ট সিলেক্ট করুন।");
+      return;
+    }
+    
+    if (isSubmitting) return;
+
+    const phoneClean = customerPhone.replace(/\D/g, '');
+    if (phoneClean.length !== 11) {
+      alert("⚠️ সঠিক ১১ ডিজিটের ফোন নম্বর দিন।");
+      return;
+    }
+
+    if (customerAddress.trim().length < 5) {
+      alert("⚠️ কুরিয়ারের জন্য বিস্তারিত ঠিকানা প্রয়োজন।");
+      return;
+    }
 
     setIsSubmitting(true);
     try {
-      const items: OrderItem[] = selectedItems.map((item, idx) => {
+      const orderItems: OrderItem[] = selectedItems.map((item, idx) => {
         const product = products.find(p => p.id === item.productId)!;
         return {
           id: `oi-${Date.now()}-${idx}`,
@@ -117,217 +101,207 @@ const OrderForm: React.FC<OrderFormProps> = ({ products, currentUser, onOrderCre
         };
       });
 
+      const uniqueId = `ORD-${Date.now().toString().slice(-6)}`;
+
+      // Fix: Add businessId and ensure advanceAmount is included in types.ts
       const newOrder: Order = {
-        id: `ORD-${Math.floor(100000 + Math.random() * 899999)}`,
+        id: uniqueId,
+        businessId: currentUser.businessId,
         moderatorId: currentUser.id,
         customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
+        customerPhone: phoneClean,
         customerAddress: customerAddress.trim(),
-        deliveryRegion,
+        deliveryRegion: deliveryRegion as any,
         deliveryCharge: deliveryCharges[deliveryRegion],
-        items,
+        items: orderItems,
         totalAmount: subtotal,
         advanceAmount: advanceAmount || 0,
         grandTotal: grandTotal,
         status: OrderStatus.PENDING,
         createdAt: new Date().toISOString(),
-        notes: notes.trim()
+        notes: notes.trim(),
+        successRate: successRate || '0%'
       };
 
       await onOrderCreate(newOrder);
       
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
-
-      setCustomerName('');
-      setCustomerPhone('');
+      
+      // Reset Form
+      setCustomerName(''); 
+      setCustomerPhone(''); 
       setCustomerAddress('');
-      setSelectedItems([]);
-      setAdvanceAmount(0);
-      setNotes('');
-    } catch (err) {
-      alert("অর্ডার তৈরি করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।");
+      setSelectedItems([]); 
+      setAdvanceAmount(0); 
+      setNotes(''); 
+      setSuccessRate(null);
+    } catch (err: any) {
+      // Error handled in App.tsx alert, just stop loading here
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="max-w-6xl mx-auto pb-20 animate-in fade-in duration-700 relative">
+    <div className="max-w-6xl mx-auto pb-20 animate-in fade-in duration-500">
       {showSuccess && (
-        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[200] bg-emerald-600 text-white px-10 py-5 rounded-[2.5rem] shadow-2xl font-black uppercase text-[10px] tracking-widest animate-in slide-in-from-top-4">
-          <span className="mr-3">🎊</span> Order Placed Successfully!
+        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[200] bg-emerald-600 text-white px-10 py-5 rounded-3xl shadow-2xl font-black uppercase text-xs tracking-widest animate-in slide-in-from-top-4">
+          🎊 Order Confirmed & Deployed!
         </div>
       )}
 
-      <div className="flex flex-col md:flex-row justify-between items-end mb-10 gap-6">
+      <div className="mb-10 flex justify-between items-end">
         <div>
-          <h2 className="text-4xl font-black text-slate-900 tracking-tight italic">Advanced Order</h2>
-          <p className="text-slate-500 font-bold uppercase tracking-widest text-[10px] mt-1 italic">Intelligent Order Hub v4.0</p>
+          <h2 className="text-4xl font-black text-slate-900 tracking-tighter italic uppercase">Asset Intake</h2>
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Operational Unit Command</p>
         </div>
-        
-        {lookupData.status !== 'none' && (
-          <div className={`flex items-center gap-4 px-6 py-4 rounded-[2.5rem] border shadow-2xl animate-in slide-in-from-right-4 duration-500 ${
-            lookupData.isVip ? 'bg-slate-950 text-white border-white/10' : 'bg-white text-slate-900 border-slate-100'
-          }`}>
-             <div className="flex flex-col text-xs">
-               <span className="text-[8px] font-black uppercase tracking-widest text-slate-500">Identity Found</span>
-               <div className="flex items-center gap-2">
-                  <span className="font-black">{lookupData.status === 'found-customer' ? 'Elite Client' : 'Fresh Lead'}</span>
-                  {lookupData.isVip && <span className="bg-orange-500 text-white text-[7px] px-1.5 py-0.5 rounded-lg font-black uppercase tracking-tighter">VIP Member</span>}
-               </div>
-             </div>
-          </div>
-        )}
+        <div className="bg-slate-900 text-white px-6 py-3 rounded-2xl hidden md:block border border-white/5 shadow-xl">
+           <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Authorized Agent</p>
+           <p className="text-xs font-black italic">{currentUser.name}</p>
+        </div>
       </div>
 
       <form onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-8">
-          <div className="bg-white p-8 md:p-10 rounded-[3rem] shadow-sm border border-slate-100">
-            <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-10 border-b border-slate-50 pb-4 italic">Customer Protocol</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
-              <div className="space-y-3">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Phone Number</label>
-                <input required type="tel" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} className="w-full px-6 py-4 md:py-5 bg-slate-50 border border-slate-200 rounded-3xl focus:ring-4 focus:ring-indigo-500/5 focus:bg-white outline-none transition-all font-black text-xl tracking-tighter" placeholder="01XXXXXXXXX" />
+          <div className="bg-white p-10 rounded-[3rem] shadow-sm border border-slate-100 relative overflow-hidden">
+             {successRate && successRate !== "N/A" && (
+               <div className={`absolute top-0 right-0 px-8 py-2 text-[10px] font-black uppercase tracking-widest text-white transform rotate-45 translate-x-10 translate-y-5 shadow-lg ${
+                 parseFloat(successRate) < 50 ? 'bg-rose-500' : 'bg-emerald-500'
+               }`}>
+                 {successRate.split('%')[0]}% Success
+               </div>
+             )}
+
+             <div className="flex items-center gap-4 mb-8">
+                <div className="w-10 h-10 bg-slate-900 text-white rounded-xl flex items-center justify-center font-black shadow-lg">1</div>
+                <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest italic">Shipping Asset Identity</h3>
+             </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <div className="flex justify-between items-center ml-2">
+                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Phone Pulse</label>
+                  {isLoadingRate && <div className="w-2 h-2 rounded-full bg-indigo-500 animate-ping"></div>}
+                </div>
+                <input 
+                  required 
+                  type="tel" 
+                  value={customerPhone} 
+                  onChange={(e) => setCustomerPhone(e.target.value)} 
+                  className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-xl outline-none focus:ring-4 focus:ring-indigo-500/10 transition-all" 
+                  placeholder="017XXXXXXXX" 
+                />
               </div>
-              <div className="space-y-3">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Customer Name</label>
-                <input required type="text" value={customerName} onChange={(e) => setCustomerName(e.target.value)} className="w-full px-6 py-4 md:py-5 bg-slate-50 border border-slate-200 rounded-3xl focus:ring-4 focus:ring-indigo-500/5 focus:bg-white outline-none transition-all font-black text-sm" placeholder="Full Name" />
-              </div>
-              <div className="md:col-span-2 space-y-3">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Shipping Address</label>
-                <textarea required rows={2} value={customerAddress} onChange={(e) => setCustomerAddress(e.target.value)} className="w-full px-6 py-4 md:py-5 bg-slate-50 border border-slate-200 rounded-3xl focus:ring-4 focus:ring-indigo-500/5 focus:bg-white outline-none transition-all font-bold resize-none text-sm" placeholder="Full Address..." />
+              <div className="space-y-2">
+                <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-2">Receiver Name</label>
+                <input 
+                  required 
+                  type="text" 
+                  value={customerName} 
+                  onChange={(e) => setCustomerName(e.target.value)} 
+                  className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:ring-4 focus:ring-indigo-500/10 transition-all" 
+                  placeholder="Full Identity" 
+                />
               </div>
 
-              <div className="md:col-span-2 pt-4">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 block mb-4 italic">Delivery Region</label>
-                <div className="grid grid-cols-2 gap-4">
-                  {[
-                    { id: 'inside', label: 'Inside Chittagong', price: 70 },
-                    { id: 'outside', label: 'Outside Chittagong', price: 130 }
-                  ].map((region) => (
-                    <button
-                      key={region.id}
-                      type="button"
-                      onClick={() => setDeliveryRegion(region.id as any)}
-                      className={`group py-4 md:py-5 rounded-[2rem] text-[10px] font-black uppercase transition-all border relative overflow-hidden ${
-                        deliveryRegion === region.id 
-                        ? 'bg-slate-900 text-white border-slate-900 shadow-2xl scale-105 z-10' 
-                        : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-white hover:border-slate-300'
-                      }`}
-                    >
-                      <span className="relative z-10">{region.label}</span>
-                      <span className={`block text-[8px] mt-1.5 font-bold ${deliveryRegion === region.id ? 'text-indigo-400' : 'opacity-40'}`}>৳{region.price}</span>
-                    </button>
-                  ))}
+              {successRate && (
+                <div className="md:col-span-2 p-5 bg-indigo-50 border border-indigo-100 rounded-2xl flex items-center gap-4 animate-in fade-in duration-300">
+                   <div className="text-2xl">📊</div>
+                   <div>
+                      <p className="text-[9px] font-black text-indigo-400 uppercase tracking-[0.2em]">Steadfast Intelligence Feed</p>
+                      <p className="text-sm font-black text-indigo-900">Success Rate: {successRate}</p>
+                   </div>
                 </div>
+              )}
+
+              <div className="md:col-span-2 space-y-2">
+                 <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-2">Detail Asset Location</label>
+                 <textarea 
+                  required 
+                  rows={2} 
+                  value={customerAddress} 
+                  onChange={(e) => setCustomerAddress(e.target.value)} 
+                  className="w-full px-6 py-5 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:bg-white transition-all resize-none shadow-inner" 
+                  placeholder="House, Road, Area, District..." 
+                 />
+              </div>
+              <div className="md:col-span-2 grid grid-cols-2 gap-4">
+                {['inside', 'outside'].map(r => (
+                  <button key={r} type="button" onClick={() => setDeliveryRegion(r as any)} className={`py-5 rounded-2xl text-[10px] font-black uppercase border transition-all ${deliveryRegion === r ? 'bg-slate-900 text-white border-slate-900 shadow-xl' : 'bg-white text-slate-400 hover:border-slate-300'}`}>
+                    {r === 'inside' ? 'Inside CTG' : 'Outside CTG'} (৳{deliveryCharges[r as keyof typeof deliveryCharges]})
+                  </button>
+                ))}
               </div>
             </div>
           </div>
 
-          <div className="bg-white p-8 md:p-10 rounded-[3rem] shadow-sm border border-slate-100">
-            <div className="flex justify-between items-center mb-10 border-b border-slate-50 pb-4">
-              <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic">Item Selection</h3>
-              <button type="button" onClick={addItem} className="bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest px-6 md:px-8 py-3 md:py-3.5 rounded-2xl shadow-xl shadow-indigo-600/20 active:scale-95 transition-all">+ Add Product</button>
+          <div className="bg-white p-10 rounded-[3rem] shadow-sm border border-slate-100">
+            <div className="flex items-center gap-4 mb-8">
+              <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center font-black shadow-lg">2</div>
+              <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest italic">Inventory Allocation</h3>
             </div>
-            
-            <div className="space-y-4 md:space-y-6">
-              {selectedItems.map((item, index) => {
-                const product = products.find(p => p.id === item.productId);
-                return (
-                  <div key={index} className="flex flex-col md:flex-row gap-4 md:gap-6 items-center bg-slate-50 p-4 md:p-6 rounded-[2rem] md:rounded-[2.5rem] border border-slate-100 group">
-                    <div className="flex-1 w-full">
-                      <select value={item.productId} onChange={(e) => updateItem(index, e.target.value, item.quantity)} className="w-full px-5 py-3 md:py-4 bg-white border border-slate-200 rounded-2xl font-black text-xs outline-none appearance-none cursor-pointer group-hover:border-indigo-200 transition-colors">
-                        {products.map(p => (
-                          <option key={p.id} value={p.id} disabled={p.stock <= 0}>
-                            {p.name} — ৳{p.price}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="flex items-center gap-4 w-full md:w-auto">
-                      <div className="flex items-center bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-                        <button type="button" onClick={() => updateItem(index, item.productId, item.quantity - 1)} className="px-4 md:px-5 py-2.5 md:py-3.5 font-black text-slate-400 hover:bg-rose-50 hover:text-rose-500 transition-colors">−</button>
-                        <span className="px-4 md:px-5 font-black text-slate-800 text-sm w-10 md:w-12 text-center">{item.quantity}</span>
-                        <button type="button" onClick={() => updateItem(index, item.productId, item.quantity + 1)} className="px-4 md:px-5 py-2.5 md:py-3.5 font-black text-slate-400 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-200 transition-all active:scale-90">+</button>
-                      </div>
-                      <button type="button" onClick={() => setSelectedItems(selectedItems.filter((_, i) => i !== index))} className="w-10 h-10 md:w-12 md:h-12 flex items-center justify-center bg-white border border-slate-200 rounded-2xl text-rose-400 hover:bg-rose-50 hover:text-rose-600 transition-all shadow-sm">🗑️</button>
-                    </div>
-                  </div>
-                );
-              })}
-              {selectedItems.length === 0 && (
-                <div className="text-center py-10 md:py-20 opacity-20 italic">
-                  <span className="text-5xl block mb-6">🛒</span>
-                  <p className="text-[10px] font-black uppercase tracking-[0.4em]">Cart is Empty</p>
+            <div className="space-y-4">
+              {selectedItems.map((item, index) => (
+                <div key={index} className="flex gap-4 items-center bg-slate-50 p-4 rounded-3xl border border-slate-100 animate-in zoom-in-95 duration-200">
+                  <select value={item.productId} onChange={(e) => {
+                    const newItems = [...selectedItems];
+                    newItems[index].productId = e.target.value;
+                    setSelectedItems(newItems);
+                  }} className="flex-1 bg-white p-3 rounded-xl font-bold text-sm outline-none border border-slate-200">
+                    <option value="" disabled>প্রোডাক্ট সিলেক্ট করুন</option>
+                    {products.map(p => <option key={p.id} value={p.id}>{p.name} - ৳{p.price}</option>)}
+                  </select>
+                  <input type="number" value={item.quantity} onChange={(e) => {
+                    const newItems = [...selectedItems];
+                    newItems[index].quantity = parseInt(e.target.value) || 1;
+                    setSelectedItems(newItems);
+                  }} className="w-20 p-3 rounded-xl font-black text-center border border-slate-200" min="1" />
+                  <button type="button" onClick={() => setSelectedItems(selectedItems.filter((_, i) => i !== index))} className="text-rose-500 font-bold p-2 hover:bg-rose-50 rounded-lg transition-colors">✕</button>
                 </div>
-              )}
+              ))}
+              <button type="button" onClick={() => setSelectedItems([...selectedItems, {productId: products[0]?.id || '', quantity: 1}])} className="w-full py-4 border-2 border-dashed border-slate-200 rounded-3xl text-slate-400 font-black text-[10px] uppercase hover:bg-slate-50 transition-all">+ Add Product Asset</button>
             </div>
           </div>
         </div>
 
         <div className="lg:col-span-1">
-          <div className="bg-slate-950 p-8 md:p-10 rounded-[3rem] text-white shadow-2xl sticky top-8 border border-white/5">
-            <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-500 mb-8 md:mb-10 border-b border-white/5 pb-4 italic">Order Summary</h3>
-            
-            <div className="space-y-6 md:space-y-8">
-              <div className="flex justify-between items-center group">
-                <span className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Subtotal</span>
-                <span className="text-base md:text-lg font-black tracking-tighter">৳{subtotal.toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between items-center group">
-                <span className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Delivery Charge</span>
-                <span className="text-base md:text-lg font-black tracking-tighter">৳{deliveryCharges[deliveryRegion]}</span>
-              </div>
+          <div className="bg-[#0f172a] p-10 rounded-[3.5rem] text-white shadow-2xl sticky top-8 border border-white/5">
+            <div className="flex items-center gap-4 mb-10 border-b border-white/10 pb-6">
+               <div className="w-10 h-10 bg-orange-600 rounded-xl flex items-center justify-center text-xl font-black shadow-orange-500/20 shadow-lg">3</div>
+               <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest italic">Operational Invoice</h3>
+            </div>
+
+            <div className="space-y-6">
+              <div className="flex justify-between text-xs font-bold text-slate-400 uppercase tracking-widest"><span>Subtotal</span><span>৳{subtotal}</span></div>
+              <div className="flex justify-between text-xs font-bold text-slate-400 uppercase tracking-widest"><span>Shipping</span><span>৳{deliveryCharges[deliveryRegion]}</span></div>
               
-              <div className="pt-6 border-t border-white/5 space-y-3">
-                <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest block ml-1">Advance Payment</label>
-                <div className="relative">
-                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-black text-sm">৳</span>
-                   <input 
-                     type="number" 
-                     value={advanceAmount || ''} 
-                     onChange={(e) => setAdvanceAmount(Number(e.target.value))} 
-                     className="w-full pl-8 pr-4 py-3 bg-white/5 border border-white/10 rounded-2xl text-sm font-black focus:border-indigo-500 focus:bg-white/10 outline-none transition-all" 
-                     placeholder="0"
-                   />
-                </div>
+              <div className="space-y-2 pt-4">
+                <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest ml-1 italic underline decoration-orange-500/30">Advance Protocol (৳)</label>
+                <input type="number" value={advanceAmount || ''} onChange={(e) => setAdvanceAmount(Number(e.target.value))} className="w-full bg-white/5 border border-white/10 p-5 rounded-2xl font-black text-2xl outline-none focus:border-orange-500 text-orange-500 shadow-inner" placeholder="0" />
               </div>
 
-              <div className="pt-8 border-t border-white/10 flex flex-col gap-1.5">
-                <span className="text-[10px] font-black uppercase tracking-[0.3em] text-orange-500 italic">Cash on Delivery</span>
-                <div className="flex justify-between items-end">
-                   <span className="text-4xl md:text-5xl font-black tracking-tighter">৳{grandTotal.toLocaleString()}</span>
-                </div>
+              <div className="pt-8 border-t border-white/10">
+                <p className="text-[9px] font-black uppercase text-indigo-400 tracking-widest mb-1 italic">Collectable COD Asset</p>
+                <p className="text-5xl font-black tracking-tighter italic">৳{grandTotal.toLocaleString()}</p>
               </div>
 
-              <div className="pt-8">
-                <button 
-                  type="submit" 
-                  disabled={isSubmitting || selectedItems.length === 0}
-                  className={`w-full font-black py-5 md:py-6 rounded-3xl transition-all shadow-2xl uppercase tracking-[0.2em] text-[10px] md:text-[11px] flex items-center justify-center gap-4 relative overflow-hidden group ${
-                    isSubmitting || selectedItems.length === 0 
-                    ? 'bg-slate-800 text-slate-600 cursor-not-allowed opacity-50' 
-                    : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-600/30 active:scale-95'
-                  }`}
-                >
-                  {isSubmitting ? (
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  ) : (
-                    <><span>🚀</span> Create Order</>
-                  )}
-                </button>
+              <div className="space-y-3 mt-8">
+                 <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest ml-1 italic">Instruction Meta</label>
+                 <textarea value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full bg-white/5 border border-white/10 p-4 rounded-xl text-xs font-bold outline-none focus:border-indigo-500 min-h-[100px] resize-none" placeholder="Notes for dispatch team..."/>
               </div>
 
-              <div className="pt-8 space-y-3">
-                <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1 block italic">Internal Notes</label>
-                <textarea 
-                  value={notes} 
-                  onChange={(e) => setNotes(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-3xl p-5 text-xs text-slate-300 outline-none focus:border-indigo-500 focus:bg-white/10 transition-all resize-none font-medium h-24"
-                  placeholder="Private instructions..."
-                />
-              </div>
+              <button 
+                type="submit" 
+                disabled={isSubmitting || selectedItems.length === 0} 
+                className="w-full py-6 bg-indigo-600 hover:bg-indigo-700 rounded-2xl font-black uppercase tracking-[0.2em] text-[11px] shadow-2xl transition-all active:scale-95 disabled:opacity-50 mt-4 group"
+              >
+                {isSubmitting ? 'Syncing...' : (
+                  <span className="flex items-center justify-center gap-2">
+                    🚀 Dispatch Operation <span className="group-hover:translate-x-1 transition-transform">→</span>
+                  </span>
+                )}
+              </button>
             </div>
           </div>
         </div>

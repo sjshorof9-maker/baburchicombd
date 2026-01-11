@@ -16,8 +16,8 @@ const Messenger: React.FC<MessengerProps> = ({ currentUser, moderators }) => {
   const [isLoading, setIsLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Combine moderators with the admin user for selection
-  const chatPartners = currentUser.role === UserRole.ADMIN 
+  // Fix: UserRole does not have ADMIN, using SUPER_ADMIN/OWNER
+  const chatPartners = (currentUser.role === UserRole.SUPER_ADMIN || currentUser.role === UserRole.OWNER)
     ? moderators 
     : [ADMIN_USER];
 

@@ -1,15 +1,16 @@
 
 import React, { useState } from 'react';
-import { Product } from '../types';
+import { Product, User } from '../types';
 
 interface ProductManagerProps {
   products: Product[];
+  currentUser: User;
   onAddProduct: (product: Product) => void;
   onUpdateProduct: (product: Product) => void;
   onDeleteProduct: (id: string) => void;
 }
 
-const ProductManager: React.FC<ProductManagerProps> = ({ products, onAddProduct, onUpdateProduct, onDeleteProduct }) => {
+const ProductManager: React.FC<ProductManagerProps> = ({ products, currentUser, onAddProduct, onUpdateProduct, onDeleteProduct }) => {
   const [name, setName] = useState('');
   const [sku, setSku] = useState('');
   const [price, setPrice] = useState('');
@@ -29,8 +30,10 @@ const ProductManager: React.FC<ProductManagerProps> = ({ products, onAddProduct,
     e.preventDefault();
     if (!name || !price || !sku || !stock) return;
 
+    // Fix: Add businessId to the new product object
     const newProduct: Product = {
       id: `p-${Date.now()}`,
+      businessId: currentUser.businessId,
       sku: sku.toUpperCase().trim(),
       name: name.trim(),
       price: parseFloat(price),
@@ -60,8 +63,11 @@ const ProductManager: React.FC<ProductManagerProps> = ({ products, onAddProduct,
 
   const saveEdit = (id: string) => {
     if (!editName || !editPrice || !editSku || !editStock) return;
+    const existingProduct = products.find(p => p.id === id);
+    if (!existingProduct) return;
+
     onUpdateProduct({
-      id,
+      ...existingProduct,
       sku: editSku.toUpperCase().trim(),
       name: editName.trim(),
       price: parseFloat(editPrice),
