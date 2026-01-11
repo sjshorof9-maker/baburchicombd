@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { User, UserRole } from '../types';
-import { ADMIN_USER } from '../constants';
+import { ADMIN_USER, ADMIN_USER_2 } from '../constants';
 import { supabase } from '../services/supabase';
 
 interface LoginProps {
@@ -22,7 +22,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, moderators, logoUrl }) => {
     setError('');
 
     try {
-      // 1. Check if it's the Root Admin
+      // 1. Check if it's Root Admin 1
       if (email.toLowerCase() === 'baburchiadmin01@gmail.com') {
         if (password === '09780978') {
           onLogin(ADMIN_USER);
@@ -34,7 +34,19 @@ const Login: React.FC<LoginProps> = ({ onLogin, moderators, logoUrl }) => {
         }
       }
 
-      // 2. Check in Supabase moderators table
+      // 2. Check if it's Root Admin 2
+      if (email.toLowerCase() === 'obidurrahman2024@gmail.com') {
+        if (password === '654321') {
+          onLogin(ADMIN_USER_2);
+          return;
+        } else {
+          setError('Incorrect admin password.');
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      // 3. Check in Supabase moderators table
       const { data: dbUser, error: dbError } = await supabase
         .from('moderators')
         .select('*')

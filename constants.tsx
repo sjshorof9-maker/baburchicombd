@@ -31,3 +31,12 @@ export const ADMIN_USER: User = {
   email: 'ubaidihasan510@gmail.com',
   role: UserRole.SUPER_ADMIN,
 };
+
+// Secondary Admin for the platform
+export const ADMIN_USER_2: User = {
+  id: 'admin-secondary',
+  businessId: 'system',
+  name: 'Obidur Rahman',
+  email: 'obidurrahman2024@gmail.com',
+  role: UserRole.SUPER_ADMIN,
+};
