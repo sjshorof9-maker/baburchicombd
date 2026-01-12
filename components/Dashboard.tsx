@@ -1,9 +1,7 @@
 
-import React, { useMemo, useState, useEffect } from 'react';
-import { Order, OrderStatus, User, UserRole, Product, Lead } from '../types';
+import React, { useMemo } from 'react';
+import { Order, OrderStatus, User, Product, Lead } from '../types';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
-import { STATUS_COLORS } from '../constants';
-import { getSalesInsights } from '../services/geminiService';
 
 interface DashboardProps {
   orders: Order[];
@@ -14,20 +12,6 @@ interface DashboardProps {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ orders, products, leads, currentUser, moderators = [] }) => {
-  const [aiInsights, setAiInsights] = useState<string>('Initializing Intelligence...');
-  
-  useEffect(() => {
-    const fetchInsights = async () => {
-      if (orders.length > 0) {
-        const insights = await getSalesInsights(orders);
-        setAiInsights(insights);
-      } else {
-        setAiInsights("No order data available for analysis.");
-      }
-    };
-    fetchInsights();
-  }, [orders]);
-
   const getBSTDate = () => {
     const d = new Date();
     const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
@@ -80,20 +64,6 @@ const Dashboard: React.FC<DashboardProps> = ({ orders, products, leads, currentU
              <p className="text-xs font-black text-white">{new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</p>
            </div>
            <div className="w-10 h-10 bg-orange-600 rounded-2xl flex items-center justify-center text-xl">🛡️</div>
-        </div>
-      </div>
-
-      {/* AI Insight Bar */}
-      <div className="bg-indigo-600 rounded-[2.5rem] p-8 text-white shadow-2xl shadow-indigo-500/30 border border-indigo-400 relative overflow-hidden group">
-        <div className="absolute -right-10 -top-10 w-40 h-40 bg-white/10 rounded-full blur-3xl group-hover:scale-150 transition-transform duration-700"></div>
-        <div className="relative z-10 flex flex-col md:flex-row items-center gap-6">
-          <div className="w-16 h-16 bg-white/10 backdrop-blur-xl rounded-2xl flex items-center justify-center text-3xl shrink-0">🤖</div>
-          <div>
-            <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-200 mb-1">AI Sales Intelligence</h4>
-            <div className="text-sm font-medium prose prose-invert max-w-none">
-              {aiInsights.split('\n').map((line, i) => <p key={i} className="m-0 leading-relaxed">{line}</p>)}
-            </div>
-          </div>
         </div>
       </div>
 

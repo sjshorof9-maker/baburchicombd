@@ -55,6 +55,7 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
     setTimeout(() => setSuccessMsg(null), 4000);
   };
 
+  // Improved Registry to identify moderators
   const contacts = useMemo(() => {
     const contactMap: Record<string, EnrichedContact> = {};
     const now = new Date();
@@ -71,6 +72,11 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
           lastOrderDate: null, daysSinceOrder: null, totalOrders: 0,
           currentStatus: l.status, moderatorId: l.moderatorId
         };
+      } else {
+        // If lead already exists, update moderator and status
+        contactMap[phone].moderatorId = l.moderatorId;
+        contactMap[phone].currentStatus = l.status;
+        contactMap[phone].leadId = l.id;
       }
     });
 
@@ -102,7 +108,7 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
     return contacts.filter(c => {
       if (searchPhone && !c.phone.includes(searchPhone)) return false;
       if (statusFilter === 'unassigned') {
-        if (c.moderatorId) return false;
+        if (c.moderatorId && c.moderatorId !== 'null' && c.moderatorId !== '') return false;
       } else if (statusFilter !== 'all') {
         if (c.currentStatus !== statusFilter) return false;
       }
@@ -126,23 +132,67 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
     const start = parseInt(rangeStart);
     const end = parseInt(rangeEnd);
     if (isNaN(start) || isNaN(end)) {
-      alert("⚠️ Valid S.N. Range (e.g. 1-100) ইনপুট দিন!");
+      alert("⚠️ Valid S.N. Range দিন!");
       return;
     }
     
     const rangeContacts = filteredContacts.slice(start - 1, end);
     const rangePhones = rangeContacts.map(c => c.phone);
     setStrategicSelectedPhones(rangePhones);
-    showToast(`${rangePhones.length} টি লিড রেঞ্জ অনুযায়ী সিলেক্ট করা হয়েছে!`);
+    showToast(`${rangePhones.length} টি লিড সিলেক্ট করা হয়েছে!`);
+  };
+
+  const handleStrategicDeployment = async () => {
+    if (strategicSelectedPhones.length === 0 || !selectedModId) {
+      alert("⚠️ মডারেটর এবং লিড সিলেক্ট করুন!");
+      return;
+    }
+    setIsProcessing(true);
+    const selectedFullContacts = contacts.filter(c => strategicSelectedPhones.includes(c.phone));
+    
+    const existingLeadIds = selectedFullContacts
+      .filter(c => c.leadId !== null)
+      .map(c => c.leadId!);
+      
+    const newLeadsToCreate: Lead[] = selectedFullContacts
+      .filter(c => c.leadId === null)
+      .map((c, idx) => ({
+        id: `rev-${Date.now()}-${idx}`,
+        businessId: 'system',
+        phoneNumber: c.phone, 
+        customerName: c.name, 
+        address: c.address,
+        moderatorId: selectedModId, 
+        status: 'pending' as LeadStatus, 
+        assignedDate, 
+        createdAt: new Date().toISOString()
+      }));
+
+    try {
+      if (existingLeadIds.length > 0) {
+        await onBulkUpdateLeads(existingLeadIds, selectedModId, assignedDate);
+      }
+      if (newLeadsToCreate.length > 0) {
+        await onAssignLeads(newLeadsToCreate);
+      }
+      
+      const modName = moderators.find(m => m.id === selectedModId)?.name || 'Agent';
+      showToast(`🎯 ${strategicSelectedPhones.length} লিড ${modName}-কে দেওয়া হয়েছে!`);
+      
+      setStrategicSelectedPhones([]);
+      setRangeStart('');
+      setRangeEnd('');
+    } catch (err) { 
+      alert("Deployment failed."); 
+    } finally { 
+      setIsProcessing(false); 
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     setIsProcessing(true);
-    const reader = new FileReader();
-    
     if (file.name.endsWith('.csv')) {
       Papa.parse(file, {
         header: true,
@@ -152,6 +202,7 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
         }
       });
     } else {
+      const reader = new FileReader();
       reader.onload = (evt) => {
         const bstr = evt.target?.result;
         const wb = XLSX.read(bstr, { type: 'binary' });
@@ -171,6 +222,7 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
       if (!phone) return null;
       return {
         id: `upl-${Date.now()}-${idx}`,
+        businessId: 'system',
         phoneNumber: phone,
         customerName: row.name || row.Name || '',
         address: row.address || row.Address || '',
@@ -183,32 +235,9 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
 
     if (newLeads.length > 0) {
       onAssignLeads(newLeads);
-      showToast(`${newLeads.length} টি লিড ইনজেক্ট করা হয়েছে!`);
+      showToast(`${newLeads.length} টি নতুন লিড সিস্টেমে যোগ হয়েছে!`);
     }
     if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  const handleStrategicDeployment = async () => {
-    if (strategicSelectedPhones.length === 0 || !selectedModId) {
-      alert("⚠️ মডারেটর এবং লিড সিলেক্ট করুন!");
-      return;
-    }
-    setIsProcessing(true);
-    const selectedFullContacts = contacts.filter(c => strategicSelectedPhones.includes(c.phone));
-    const existingLeadIds = selectedFullContacts.filter(c => c.leadId !== null).map(c => c.leadId!);
-    const newLeadsToCreate: Lead[] = selectedFullContacts.filter(c => c.leadId === null).map((c, idx) => ({
-      id: `rev-${Date.now()}-${idx}`,
-      phoneNumber: c.phone, customerName: c.name, address: c.address,
-      moderatorId: selectedModId, status: 'pending' as LeadStatus, assignedDate, createdAt: new Date().toISOString()
-    }));
-    try {
-      if (existingLeadIds.length > 0) await onBulkUpdateLeads(existingLeadIds, selectedModId, assignedDate);
-      if (newLeadsToCreate.length > 0) await onAssignLeads(newLeadsToCreate);
-      showToast(`🎯 ${strategicSelectedPhones.length} টি লিড মোতায়েন করা হয়েছে!`);
-      setStrategicSelectedPhones([]);
-      setRangeStart('');
-      setRangeEnd('');
-    } catch (err) { alert("Deployment failed."); } finally { setIsProcessing(false); }
   };
 
   return (
@@ -237,32 +266,13 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
           <div className="bg-slate-950 p-8 rounded-[3rem] text-white shadow-2xl border border-white/5">
             <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-6 border-b border-white/5 pb-4 italic">Deployment Radar</h3>
             <div className="space-y-5">
-               
-               {/* S.N. Range Selection */}
                <div className="bg-white/5 p-5 rounded-2xl border border-white/5 space-y-3">
                  <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Select By S.N. Range</p>
                  <div className="flex gap-2">
-                    <input 
-                      type="number" 
-                      placeholder="Start S.N." 
-                      value={rangeStart} 
-                      onChange={(e) => setRangeStart(e.target.value)}
-                      className="w-1/2 px-3 py-2 bg-slate-900 border border-white/10 rounded-lg text-xs font-black outline-none focus:border-indigo-500"
-                    />
-                    <input 
-                      type="number" 
-                      placeholder="End S.N." 
-                      value={rangeEnd} 
-                      onChange={(e) => setRangeEnd(e.target.value)}
-                      className="w-1/2 px-3 py-2 bg-slate-900 border border-white/10 rounded-lg text-xs font-black outline-none focus:border-indigo-500"
-                    />
+                    <input type="number" placeholder="Start" value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} className="w-1/2 px-3 py-2 bg-slate-900 border border-white/10 rounded-lg text-xs font-black outline-none focus:border-indigo-500" />
+                    <input type="number" placeholder="End" value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} className="w-1/2 px-3 py-2 bg-slate-900 border border-white/10 rounded-lg text-xs font-black outline-none focus:border-indigo-500" />
                  </div>
-                 <button 
-                  onClick={handleApplyRange}
-                  className="w-full py-2 bg-indigo-600/20 text-indigo-400 border border-indigo-600/30 rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-indigo-600/40 transition-all"
-                 >
-                   Apply Range Selection
-                 </button>
+                 <button onClick={handleApplyRange} className="w-full py-2 bg-indigo-600/20 text-indigo-400 border border-indigo-600/30 rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-indigo-600/40 transition-all">Apply Range</button>
                </div>
 
                <div className="bg-white/5 p-5 rounded-2xl border border-white/5 flex justify-between items-center">
@@ -280,7 +290,7 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
                  <input type="date" value={assignedDate} onChange={(e) => setAssignedDate(e.target.value)} className="w-full px-5 py-4 bg-white/5 border border-white/10 rounded-xl text-[11px] font-black outline-none" />
                </div>
                <button onClick={handleStrategicDeployment} disabled={isProcessing || strategicSelectedPhones.length === 0} className="w-full py-5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-800 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl transition-all active:scale-95">
-                 Execute Assignment
+                 {isProcessing ? 'Processing...' : 'Execute Assignment'}
                </button>
             </div>
           </div>
@@ -296,7 +306,6 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
                  <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest ml-1 italic">Last Called (Min Days)</label>
                  <input type="number" value={minDaysSinceCall} onChange={(e) => setMinDaysSinceCall(e.target.value)} placeholder="E.g. 15" className="w-full px-5 py-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-black outline-none" />
                </div>
-               <button onClick={() => { setMinDaysSinceOrder(''); setMinDaysSinceCall(''); }} className="w-full py-3 text-[9px] font-black uppercase text-slate-400 border border-slate-100 rounded-xl hover:bg-slate-50">Clear Filters</button>
             </div>
           </div>
         </div>
@@ -321,66 +330,51 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
                         <input type="checkbox" onChange={(e) => {
                           if (e.target.checked) setStrategicSelectedPhones(filteredContacts.map(c => c.phone));
                           else setStrategicSelectedPhones([]);
-                        }} className="w-5 h-5 rounded-lg" />
+                        }} className="w-5 h-5" />
                       </th>
                       <th className="px-10 py-7 text-[9px] font-black text-slate-500 uppercase tracking-widest">Client Identity</th>
-                      <th className="px-10 py-7 text-[9px] font-black text-slate-500 uppercase tracking-widest">Pulse Status</th>
+                      <th className="px-10 py-7 text-[9px] font-black text-slate-500 uppercase tracking-widest">Agent Handle</th>
                       <th className="px-10 py-7 text-[9px] font-black text-slate-500 uppercase tracking-widest text-right">Operational Log</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
                     {filteredContacts.length === 0 ? (
-                      <tr>
-                        <td colSpan={5} className="py-24 text-center opacity-20 italic">
-                          <p className="text-xs font-black uppercase tracking-[0.4em]">No Records in Radar</p>
-                        </td>
-                      </tr>
+                      <tr><td colSpan={5} className="py-24 text-center opacity-20 italic font-black uppercase tracking-widest">No Records in Radar</td></tr>
                     ) : (
-                      filteredContacts.map((contact, idx) => (
-                        <tr key={contact.phone} className={`group hover:bg-slate-50/50 transition-all ${strategicSelectedPhones.includes(contact.phone) ? 'bg-indigo-50/30' : ''}`}>
-                          <td className="px-4 py-8 text-center text-[10px] font-black text-slate-400 border-r border-slate-50 italic">
-                             {idx + 1}
-                          </td>
-                          <td className="px-6 py-8 text-center border-r border-slate-50">
-                             <input type="checkbox" checked={strategicSelectedPhones.includes(contact.phone)} onChange={() => { setStrategicSelectedPhones(prev => prev.includes(contact.phone) ? prev.filter(p => p !== contact.phone) : [...prev, contact.phone]); }} className="w-6 h-6 rounded-xl border-slate-300 text-indigo-600 cursor-pointer" />
-                          </td>
-                          <td className="px-10 py-8">
-                             <div className="flex items-center gap-4">
-                                <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black text-sm uppercase shadow-lg group-hover:scale-110 transition-transform">{contact.name.charAt(0)}</div>
-                                <div>
-                                  <p className="font-black text-slate-900 text-base font-mono tracking-tighter">{contact.phone}</p>
-                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-0.5 truncate max-w-[150px]">{contact.name}</p>
-                                </div>
-                             </div>
-                          </td>
-                          <td className="px-10 py-8">
-                             <div className="space-y-1.5">
-                                <div className="flex items-center gap-2">
-                                   <span className="text-[9px] font-black text-slate-800 uppercase tracking-tighter">Calls:</span>
-                                   <span className={`text-[9px] font-black px-2 py-0.5 rounded-lg ${contact.daysSinceCall === null ? 'bg-slate-100 text-slate-400' : contact.daysSinceCall > 30 ? 'bg-rose-50 text-rose-600' : 'bg-indigo-50 text-indigo-600'}`}>
-                                     {contact.daysSinceCall !== null ? `${contact.daysSinceCall}d ago` : 'Never'}
-                                   </span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                   <span className="text-[9px] font-black text-slate-800 uppercase tracking-tighter">Order:</span>
-                                   <span className={`text-[9px] font-black px-2 py-0.5 rounded-lg ${contact.daysSinceOrder === null ? 'bg-slate-100 text-slate-400' : contact.daysSinceOrder > 60 ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                                     {contact.daysSinceOrder !== null ? `${contact.daysSinceOrder}d ago` : 'None'}
-                                   </span>
-                                </div>
-                             </div>
-                          </td>
-                          <td className="px-10 py-8 text-right">
-                             <div className="flex flex-col items-end">
-                                <span className={`px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest border ${contact.currentStatus === 'unassigned' ? 'bg-slate-50 text-slate-400 border-slate-100' : 'bg-indigo-50 text-indigo-600 border-indigo-100'}`}>
-                                  {contact.currentStatus}
-                                </span>
-                                {contact.moderatorId && (
-                                   <p className="text-[8px] font-black text-slate-300 uppercase mt-2 italic tracking-widest">Assigned Agent Active</p>
-                                )}
-                             </div>
-                          </td>
-                        </tr>
-                      ))
+                      filteredContacts.map((contact, idx) => {
+                        const modName = moderators.find(m => String(m.id) === String(contact.moderatorId))?.name || 'Unassigned';
+                        return (
+                          <tr key={contact.phone} className={`group hover:bg-slate-50/50 transition-all ${strategicSelectedPhones.includes(contact.phone) ? 'bg-indigo-50/30' : ''}`}>
+                            <td className="px-4 py-8 text-center text-[10px] font-black text-slate-400 border-r border-slate-50 italic">{idx + 1}</td>
+                            <td className="px-6 py-8 text-center border-r border-slate-50">
+                               <input type="checkbox" checked={strategicSelectedPhones.includes(contact.phone)} onChange={() => { setStrategicSelectedPhones(prev => prev.includes(contact.phone) ? prev.filter(p => p !== contact.phone) : [...prev, contact.phone]); }} className="w-6 h-6 rounded-xl cursor-pointer" />
+                            </td>
+                            <td className="px-10 py-8">
+                               <div className="flex items-center gap-4">
+                                  <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black text-sm uppercase">{contact.name.charAt(0)}</div>
+                                  <div>
+                                    <p className="font-black text-slate-900 text-base font-mono tracking-tighter">{contact.phone}</p>
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-0.5 truncate max-w-[150px]">{contact.name}</p>
+                                  </div>
+                               </div>
+                            </td>
+                            <td className="px-10 py-8">
+                               <div className="flex items-center gap-2">
+                                  <div className={`w-2 h-2 rounded-full ${contact.moderatorId ? 'bg-indigo-500' : 'bg-slate-200'}`}></div>
+                                  <p className={`text-[11px] font-black uppercase tracking-widest ${contact.moderatorId ? 'text-indigo-600' : 'text-slate-400 italic'}`}>{modName}</p>
+                               </div>
+                            </td>
+                            <td className="px-10 py-8 text-right">
+                               <div className="flex flex-col items-end">
+                                  <span className={`px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest border ${contact.currentStatus === 'unassigned' ? 'bg-slate-50 text-slate-400 border-slate-100' : 'bg-indigo-50 text-indigo-600 border-indigo-100'}`}>
+                                    {contact.currentStatus}
+                                  </span>
+                                  {contact.lastCallDate && <p className="text-[7px] font-black text-slate-300 uppercase mt-2 tracking-widest italic">Last Call: {new Date(contact.lastCallDate).toLocaleDateString()}</p>}
+                               </div>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
