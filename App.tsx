@@ -80,6 +80,28 @@ const App: React.FC = () => {
     }
   };
 
+  const fetchLeads = async () => {
+    const { data: dbLeads, error } = await supabase
+      .from('leads')
+      .select('*')
+      .order('created_at', { ascending: false });
+    
+    if (!error && dbLeads) {
+      setLeads(dbLeads.map((l: any) => ({
+        id: String(l.id),
+        businessId: String(l.business_id || 'system'),
+        phoneNumber: l.phone_number,
+        customerName: l.customer_name,
+        address: l.address,
+        moderatorId: String(l.moderator_id),
+        status: l.status,
+        assignedDate: l.assigned_date,
+        createdAt: l.created_at,
+        successRate: l.success_rate
+      })));
+    }
+  };
+
   useEffect(() => {
     const initApp = async () => {
       try {
@@ -89,34 +111,19 @@ const App: React.FC = () => {
           setCurrentUser({ ...parsed, id: String(parsed.id) });
         }
 
-        const [
-          { data: dbProducts },
-          { data: dbLeads },
-          { data: dbSettings }
-        ] = await Promise.all([
+        const [{ data: dbProducts }, { data: dbSettings }] = await Promise.all([
           supabase.from('products').select('*'),
-          supabase.from('leads').select('*').order('created_at', { ascending: false }),
           supabase.from('settings').select('*').maybeSingle()
         ]);
 
-        await fetchModerators();
-        await fetchOrders();
+        await Promise.all([
+          fetchModerators(),
+          fetchOrders(),
+          fetchLeads()
+        ]);
         
         if (dbProducts) setProducts(dbProducts.map((p: any) => ({ ...p, id: String(p.id), businessId: String(p.business_id || 'system') })));
-        if (dbLeads) {
-          setLeads(dbLeads.map((l: any) => ({
-            id: String(l.id),
-            businessId: String(l.business_id || 'system'),
-            phoneNumber: l.phone_number,
-            customerName: l.customer_name,
-            address: l.address,
-            moderatorId: String(l.moderator_id),
-            status: l.status,
-            assignedDate: l.assigned_date,
-            createdAt: l.created_at,
-            successRate: l.success_rate
-          })));
-        }
+        
         if (dbSettings) {
           if (dbSettings.courier_config) setCourierConfig(dbSettings.courier_config);
           setLogoUrl(dbSettings.logo_url);
@@ -153,7 +160,9 @@ const App: React.FC = () => {
 
       const { error } = await supabase.from('orders').insert([dbPayload]);
       if (error) throw new Error(error.message);
-      setOrders(prev => [newOrder, ...prev]);
+      
+      // Update local state and global orders
+      await fetchOrders();
       setActiveTab('orders'); 
     } catch (err: any) {
       alert(`❌ অর্ডার সেভ হয়নি: ${err.message}`);
@@ -234,6 +243,55 @@ const App: React.FC = () => {
     }
   };
 
+  // Improved Lead Handling
+  const handleAssignLeads = async (newLeads: Lead[]) => {
+    try {
+      const dbLeads = newLeads.map(l => ({
+        phone_number: l.phoneNumber,
+        customer_name: l.customerName,
+        address: l.address,
+        moderator_id: l.moderatorId === '' ? null : l.moderatorId,
+        status: l.status,
+        assigned_date: l.assignedDate || null,
+        created_at: l.createdAt
+      }));
+      
+      const { error } = await supabase.from('leads').insert(dbLeads);
+      if (error) throw error;
+      await fetchLeads();
+    } catch (err: any) {
+      alert("Lead Assignment Error: " + err.message);
+    }
+  };
+
+  const handleBulkUpdateLeads = async (leadIds: string[], modId: string, date: string) => {
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .update({ 
+          moderator_id: modId, 
+          assigned_date: date, 
+          status: 'pending' 
+        })
+        .in('id', leadIds);
+      
+      if (error) throw error;
+      await fetchLeads();
+    } catch (err: any) {
+      alert("Bulk Update Error: " + err.message);
+    }
+  };
+
+  const handleDeleteLead = async (id: string) => {
+    try {
+      const { error } = await supabase.from('leads').delete().eq('id', id);
+      if (error) throw error;
+      await fetchLeads();
+    } catch (err: any) {
+      alert("Delete Error: " + err.message);
+    }
+  };
+
   if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white font-black uppercase tracking-widest">Baburchi Intelligence Loading...</div>;
   if (!currentUser) return <Login onLogin={handleLogin} moderators={moderators} logoUrl={logoUrl} />;
 
@@ -244,11 +302,55 @@ const App: React.FC = () => {
       {activeTab === 'dashboard' && isAdmin && <Dashboard orders={orders} products={products} leads={leads} currentUser={currentUser} moderators={moderators} />}
       {activeTab === 'create' && <OrderForm products={products} currentUser={currentUser} onOrderCreate={handleCreateOrder} leads={leads} allOrders={orders} courierConfig={courierConfig} />}
       {activeTab === 'orders' && <OrderList orders={orders} currentUser={currentUser} products={products} moderators={moderators} courierConfig={courierConfig} onUpdateStatus={handleUpdateOrderStatus} onBulkUpdateStatus={handleBulkUpdateOrderStatus} />}
-      {activeTab === 'leads' && isAdmin && <LeadManager moderators={moderators} leads={leads} orders={orders} onAssignLeads={(l) => { setLeads(prev => [...prev, ...l]); }} onBulkUpdateLeads={(ids, mod, date) => { setLeads(prev => prev.map(l => ids.includes(l.id) ? {...l, moderatorId: mod, assignedDate: date, status: 'pending'} : l)); }} onDeleteLead={(id) => setLeads(prev => prev.filter(l => l.id !== id))} />}
-      {activeTab === 'myleads' && currentUser.role === UserRole.MODERATOR && <ModeratorLeads leads={leads.filter(l => String(l.moderatorId) === String(currentUser.id))} onUpdateStatus={(id, status) => { setLeads(prev => prev.map(l => l.id === id ? {...l, status} : l)); }} allOrders={orders} />}
+      {activeTab === 'leads' && isAdmin && (
+        <LeadManager 
+          moderators={moderators} 
+          leads={leads} 
+          orders={orders} 
+          onAssignLeads={handleAssignLeads} 
+          onBulkUpdateLeads={handleBulkUpdateLeads} 
+          onDeleteLead={handleDeleteLead} 
+        />
+      )}
+      {activeTab === 'myleads' && currentUser.role === UserRole.MODERATOR && (
+        <ModeratorLeads 
+          leads={leads.filter(l => String(l.moderatorId) === String(currentUser.id))} 
+          onUpdateStatus={async (id, status) => {
+            const { error } = await supabase.from('leads').update({ status }).eq('id', id);
+            if (!error) await fetchLeads();
+          }} 
+          allOrders={orders} 
+        />
+      )}
       {activeTab === 'customers' && isAdmin && <CustomerManager orders={orders} leads={leads} />}
       {activeTab === 'messages' && <Messenger currentUser={currentUser} moderators={moderators} />}
-      {activeTab === 'moderators' && isAdmin && <ModeratorManager moderators={moderators} leads={leads} orders={orders} onAddModerator={async () => true} onDeleteModerator={async () => {}} onToggleStatus={async () => {}} />}
+      {activeTab === 'moderators' && isAdmin && (
+        <ModeratorManager 
+          moderators={moderators} 
+          leads={leads} 
+          orders={orders} 
+          onAddModerator={async (m) => {
+            const { data, error } = await supabase.from('moderators').insert([{
+              name: m.name,
+              email: m.email,
+              password: m.password,
+              role: m.role,
+              is_active: true
+            }]).select();
+            if (error) { alert(error.message); return false; }
+            await fetchModerators();
+            return true;
+          }} 
+          onDeleteModerator={async (id) => {
+            await supabase.from('moderators').delete().eq('id', id);
+            await fetchModerators();
+          }} 
+          onToggleStatus={async (id, active) => {
+            await supabase.from('moderators').update({ is_active: active }).eq('id', id);
+            await fetchModerators();
+          }} 
+        />
+      )}
       {activeTab === 'products' && isAdmin && <ProductManager products={products} currentUser={currentUser} onAddProduct={() => {}} onUpdateProduct={() => {}} onDeleteProduct={() => {}} />}
       {activeTab === 'settings' && isAdmin && <Settings config={courierConfig} onSave={handleSaveSettings} onUpdateLogo={handleUpdateLogo} logoUrl={logoUrl} />}
     </Layout>

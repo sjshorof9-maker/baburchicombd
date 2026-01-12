@@ -84,6 +84,7 @@ const ModeratorManager: React.FC<ModeratorManagerProps> = ({ moderators, leads, 
 
   // Team Summary Stats
   const teamStats = useMemo(() => {
+    // Correctly filtering leads that are assigned for today regardless of when they were created
     const todayLeads = leads.filter(l => l.assignedDate === todayStr);
     const todayCalled = todayLeads.filter(l => l.status !== 'pending');
     const todayOrders = orders.filter(o => o.createdAt.split('T')[0] === todayStr);
@@ -200,7 +201,7 @@ const ModeratorManager: React.FC<ModeratorManagerProps> = ({ moderators, leads, 
             const online = isOnline(mod.lastSeen);
             const isActive = mod.is_active !== false;
             
-            // Performance Metrics
+            // Critical Performance Logic: Ensures counts work after refresh
             const todayLeads = leads.filter(l => String(l.moderatorId) === modIdStr && l.assignedDate === todayStr);
             const todayCalled = todayLeads.filter(l => l.status !== 'pending').length;
             const todayOrdersCount = orders.filter(o => String(o.moderatorId) === modIdStr && o.createdAt.split('T')[0] === todayStr).length;
