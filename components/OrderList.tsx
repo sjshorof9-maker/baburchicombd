@@ -18,7 +18,6 @@ interface OrderListProps {
 }
 
 const OrderList: React.FC<OrderListProps> = ({ orders, currentUser, products, moderators, courierConfig, onUpdateStatus, onBulkUpdateStatus, logoUrl }) => {
-  // Fix: Use SUPER_ADMIN/OWNER instead of ADMIN
   const isAdmin = currentUser.role === UserRole.SUPER_ADMIN || currentUser.role === UserRole.OWNER;
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -87,7 +86,8 @@ const OrderList: React.FC<OrderListProps> = ({ orders, currentUser, products, mo
       "Address": o.customerAddress,
       "COD": o.grandTotal,
       "Status": o.status.toUpperCase(),
-      "Consignment": o.steadfastId || 'N/A'
+      "Consignment": o.steadfastId || 'N/A',
+      "Moderator": moderators.find(m => String(m.id) === String(o.moderatorId))?.name || 'Unknown'
     }));
     const worksheet = XLSX.utils.json_to_sheet(data);
     const workbook = XLSX.utils.book_new();
@@ -136,6 +136,7 @@ const OrderList: React.FC<OrderListProps> = ({ orders, currentUser, products, mo
                 </th>
                 <th className="px-10 py-8 text-[9px] font-black text-slate-400 uppercase tracking-widest">Client Identity</th>
                 <th className="px-10 py-8 text-[9px] font-black text-slate-400 uppercase tracking-widest text-center">Value</th>
+                <th className="px-10 py-8 text-[9px] font-black text-slate-400 uppercase tracking-widest text-center">Moderator</th>
                 <th className="px-10 py-8 text-[9px] font-black text-slate-400 uppercase tracking-widest text-center">Status</th>
                 <th className="px-10 py-8 text-[9px] font-black text-slate-400 uppercase tracking-widest text-right">Actions</th>
               </tr>
@@ -144,6 +145,7 @@ const OrderList: React.FC<OrderListProps> = ({ orders, currentUser, products, mo
               {filteredOrders.map((order, index) => {
                 const isSyncing = syncingId === order.id;
                 const isSelected = selectedOrders.includes(order.id);
+                const moderator = moderators.find(m => String(m.id) === String(order.moderatorId));
                 return (
                   <tr key={order.id} className={`group hover:bg-slate-50/50 transition-all ${isSelected ? 'bg-indigo-50/30' : ''}`}>
                     <td className="px-6 py-10 text-center text-[11px] font-black text-slate-300 italic border-r">
@@ -161,6 +163,10 @@ const OrderList: React.FC<OrderListProps> = ({ orders, currentUser, products, mo
                     <td className="px-10 py-10 text-center">
                       <p className="text-lg font-black text-slate-900 tracking-tighter italic">৳{order.grandTotal}</p>
                       <p className="text-[8px] font-black text-slate-400 uppercase mt-0.5">COD Impact</p>
+                    </td>
+                    <td className="px-10 py-10 text-center">
+                       <p className="text-xs font-black text-slate-700">{moderator?.name || 'Unknown'}</p>
+                       <p className="text-[8px] font-black text-slate-400 uppercase">Agent</p>
                     </td>
                     <td className="px-10 py-10 text-center">
                        <div className="flex flex-col items-center gap-2">

@@ -15,7 +15,6 @@ import LeadManager from './components/LeadManager';
 import ModeratorLeads from './components/ModeratorLeads';
 import CustomerManager from './components/CustomerManager';
 import Messenger from './components/Messenger';
-import { handleSteadfastWebhook } from './services/courierService';
 
 const SESSION_KEY = 'baburchi_user_session';
 
@@ -41,7 +40,7 @@ const App: React.FC = () => {
     if (!error && data) {
       setModerators(data.map(m => ({
         id: String(m.id),
-        businessId: String(m.business_id || 'system'),
+        businessId: 'system',
         name: m.name,
         email: m.email,
         role: m.role as UserRole,
@@ -59,8 +58,8 @@ const App: React.FC = () => {
     if (!error && dbOrders) {
       setOrders(dbOrders.map((o: any) => ({
         id: String(o.id),
-        businessId: String(o.business_id || 'system'),
-        moderatorId: String(o.moderator_id),
+        businessId: 'system',
+        moderatorId: String(o.moderator_id || ''),
         customerName: o.customer_name,
         customerPhone: o.customer_phone,
         customerAddress: o.customer_address,
@@ -89,15 +88,14 @@ const App: React.FC = () => {
     if (!error && dbLeads) {
       setLeads(dbLeads.map((l: any) => ({
         id: String(l.id),
-        businessId: String(l.business_id || 'system'),
+        businessId: 'system',
         phoneNumber: l.phone_number,
         customerName: l.customer_name,
         address: l.address,
-        moderatorId: String(l.moderator_id),
+        moderatorId: String(l.moderator_id || ''),
         status: l.status,
         assignedDate: l.assigned_date,
-        createdAt: l.created_at,
-        successRate: l.success_rate
+        createdAt: l.created_at
       })));
     }
   };
@@ -122,14 +120,14 @@ const App: React.FC = () => {
           fetchLeads()
         ]);
         
-        if (dbProducts) setProducts(dbProducts.map((p: any) => ({ ...p, id: String(p.id), businessId: String(p.business_id || 'system') })));
+        if (dbProducts) setProducts(dbProducts.map((p: any) => ({ ...p, id: String(p.id), businessId: 'system' })));
         
         if (dbSettings) {
           if (dbSettings.courier_config) setCourierConfig(dbSettings.courier_config);
           setLogoUrl(dbSettings.logo_url);
         }
       } catch (error) {
-        console.error("Critical Init Error:", error);
+        console.error("Init Error:", error);
       } finally {
         setIsLoading(false);
       }
@@ -139,34 +137,36 @@ const App: React.FC = () => {
 
   const handleCreateOrder = async (newOrder: Order) => {
     try {
+      // ID parsing logic for BigInt compatibility
+      const rawModId = newOrder.moderatorId;
+      const isNumeric = /^\d+$/.test(rawModId);
+      const modId = isNumeric ? parseInt(rawModId) : null;
+      
       const dbPayload = {
-        id: String(newOrder.id),
-        business_id: String(newOrder.businessId),
-        moderator_id: String(newOrder.moderatorId),
-        customer_name: String(newOrder.customerName),
-        customer_phone: String(newOrder.customerPhone),
-        customer_address: String(newOrder.customerAddress),
-        delivery_region: String(newOrder.deliveryRegion),
-        delivery_charge: Number(newOrder.deliveryCharge),
-        items: JSON.stringify(newOrder.items), 
-        total_amount: Number(newOrder.totalAmount),
-        grand_total: Number(newOrder.grandTotal),
-        status: String(newOrder.status),
-        created_at: new Date(newOrder.createdAt).toISOString(),
-        notes: String(newOrder.notes || ''),
-        advance_amount: Number(newOrder.advanceAmount || 0),
-        success_rate: String(newOrder.successRate || '0%')
+        id: newOrder.id,
+        moderator_id: modId,
+        customer_name: newOrder.customerName,
+        customer_phone: newOrder.customerPhone,
+        customer_address: newOrder.customerAddress,
+        delivery_region: newOrder.deliveryRegion,
+        delivery_charge: newOrder.deliveryCharge,
+        items: typeof newOrder.items === 'string' ? newOrder.items : JSON.stringify(newOrder.items), 
+        total_amount: newOrder.totalAmount,
+        grand_total: newOrder.grandTotal,
+        status: newOrder.status,
+        created_at: new Date().toISOString(),
+        notes: newOrder.notes || '',
+        advance_amount: newOrder.advanceAmount,
+        success_rate: newOrder.successRate || '0%'
       };
 
       const { error } = await supabase.from('orders').insert([dbPayload]);
-      if (error) throw new Error(error.message);
+      if (error) throw error;
       
-      // Update local state and global orders
       await fetchOrders();
-      setActiveTab('orders'); 
     } catch (err: any) {
-      alert(`❌ অর্ডার সেভ হয়নি: ${err.message}`);
-      throw err; 
+      alert(`Order Creation Failed: ${err.message}`);
+      throw err;
     }
   };
 
@@ -174,31 +174,14 @@ const App: React.FC = () => {
     try {
       const updatePayload: any = { status: newStatus };
       if (courierData) {
-        updatePayload.steadfast_id = String(courierData.id);
-        updatePayload.courier_status = String(courierData.status);
+        updatePayload.steadfast_id = courierData.id;
+        updatePayload.courier_status = courierData.status;
       }
-
       const { error } = await supabase.from('orders').update(updatePayload).eq('id', orderId);
       if (error) throw error;
-
-      setOrders(prev => prev.map(o => o.id === orderId ? { 
-        ...o, 
-        status: newStatus, 
-        steadfastId: courierData?.id || o.steadfastId,
-        courierStatus: courierData?.status || o.courierStatus
-      } : o));
+      await fetchOrders();
     } catch (err: any) {
-      alert("Status Update Error: " + err.message);
-    }
-  };
-
-  const handleBulkUpdateOrderStatus = async (orderIds: string[], newStatus: OrderStatus) => {
-    try {
-      const { error } = await supabase.from('orders').update({ status: newStatus }).in('id', orderIds);
-      if (error) throw error;
-      setOrders(prev => prev.map(o => orderIds.includes(o.id) ? { ...o, status: newStatus } : o));
-    } catch (err: any) {
-      alert("Bulk Update Error: " + err.message);
+      alert("Update Error: " + err.message);
     }
   };
 
@@ -216,83 +199,26 @@ const App: React.FC = () => {
 
   const handleSaveSettings = async (config: CourierConfig) => {
     try {
-      const { error } = await supabase.from('settings').upsert({
-        id: 1,
-        courier_config: config,
-        updated_at: new Date().toISOString()
-      });
+      const { error } = await supabase.from('settings').upsert({ id: 1, courier_config: config });
       if (error) throw error;
       setCourierConfig(config);
-      alert("Settings successfully saved to Cloud.");
+      alert("Settings Synced!");
     } catch (err: any) {
-      alert("Settings Save Error: " + err.message);
+      alert("Save Error: " + err.message);
     }
   };
 
   const handleUpdateLogo = async (url: string | null) => {
     try {
-      const { error } = await supabase.from('settings').upsert({
-        id: 1,
-        logo_url: url,
-        updated_at: new Date().toISOString()
-      });
+      const { error } = await supabase.from('settings').upsert({ id: 1, logo_url: url });
       if (error) throw error;
       setLogoUrl(url);
     } catch (err: any) {
-      alert("Logo Update Error: " + err.message);
+      alert("Logo Error: " + err.message);
     }
   };
 
-  // Improved Lead Handling
-  const handleAssignLeads = async (newLeads: Lead[]) => {
-    try {
-      const dbLeads = newLeads.map(l => ({
-        phone_number: l.phoneNumber,
-        customer_name: l.customerName,
-        address: l.address,
-        moderator_id: l.moderatorId === '' ? null : l.moderatorId,
-        status: l.status,
-        assigned_date: l.assignedDate || null,
-        created_at: l.createdAt
-      }));
-      
-      const { error } = await supabase.from('leads').insert(dbLeads);
-      if (error) throw error;
-      await fetchLeads();
-    } catch (err: any) {
-      alert("Lead Assignment Error: " + err.message);
-    }
-  };
-
-  const handleBulkUpdateLeads = async (leadIds: string[], modId: string, date: string) => {
-    try {
-      const { error } = await supabase
-        .from('leads')
-        .update({ 
-          moderator_id: modId, 
-          assigned_date: date, 
-          status: 'pending' 
-        })
-        .in('id', leadIds);
-      
-      if (error) throw error;
-      await fetchLeads();
-    } catch (err: any) {
-      alert("Bulk Update Error: " + err.message);
-    }
-  };
-
-  const handleDeleteLead = async (id: string) => {
-    try {
-      const { error } = await supabase.from('leads').delete().eq('id', id);
-      if (error) throw error;
-      await fetchLeads();
-    } catch (err: any) {
-      alert("Delete Error: " + err.message);
-    }
-  };
-
-  if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white font-black uppercase tracking-widest">Baburchi Intelligence Loading...</div>;
+  if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white font-black uppercase tracking-[0.5em] animate-pulse">Initializing OS...</div>;
   if (!currentUser) return <Login onLogin={handleLogin} moderators={moderators} logoUrl={logoUrl} />;
 
   const isAdmin = currentUser.role === UserRole.SUPER_ADMIN || currentUser.role === UserRole.OWNER;
@@ -301,23 +227,45 @@ const App: React.FC = () => {
     <Layout user={currentUser} onLogout={handleLogout} activeTab={activeTab} setActiveTab={setActiveTab} logoUrl={logoUrl}>
       {activeTab === 'dashboard' && isAdmin && <Dashboard orders={orders} products={products} leads={leads} currentUser={currentUser} moderators={moderators} />}
       {activeTab === 'create' && <OrderForm products={products} currentUser={currentUser} onOrderCreate={handleCreateOrder} leads={leads} allOrders={orders} courierConfig={courierConfig} />}
-      {activeTab === 'orders' && <OrderList orders={orders} currentUser={currentUser} products={products} moderators={moderators} courierConfig={courierConfig} onUpdateStatus={handleUpdateOrderStatus} onBulkUpdateStatus={handleBulkUpdateOrderStatus} />}
+      {activeTab === 'orders' && <OrderList orders={orders} currentUser={currentUser} products={products} moderators={moderators} courierConfig={courierConfig} onUpdateStatus={handleUpdateOrderStatus} onBulkUpdateStatus={() => {}} />}
       {activeTab === 'leads' && isAdmin && (
         <LeadManager 
           moderators={moderators} 
           leads={leads} 
           orders={orders} 
-          onAssignLeads={handleAssignLeads} 
-          onBulkUpdateLeads={handleBulkUpdateLeads} 
-          onDeleteLead={handleDeleteLead} 
+          onAssignLeads={async (newLeads) => {
+            const dbLeads = newLeads.map(l => {
+              const mIdNumeric = /^\d+$/.test(l.moderatorId) ? parseInt(l.moderatorId) : null;
+              return {
+                phone_number: l.phoneNumber,
+                customer_name: l.customerName,
+                address: l.address,
+                moderator_id: mIdNumeric,
+                status: l.status,
+                assigned_date: l.assignedDate || null
+              }
+            });
+            const { error } = await supabase.from('leads').insert(dbLeads);
+            if (error) alert(error.message);
+            await fetchLeads();
+          }} 
+          onBulkUpdateLeads={async (ids, modId, date) => {
+            const mIdNumeric = /^\d+$/.test(modId) ? parseInt(modId) : null;
+            await supabase.from('leads').update({ moderator_id: mIdNumeric, assigned_date: date }).in('id', ids.map(id => parseInt(id)));
+            await fetchLeads();
+          }} 
+          onDeleteLead={async (id) => {
+            await supabase.from('leads').delete().eq('id', parseInt(id));
+            await fetchLeads();
+          }} 
         />
       )}
       {activeTab === 'myleads' && currentUser.role === UserRole.MODERATOR && (
         <ModeratorLeads 
           leads={leads.filter(l => String(l.moderatorId) === String(currentUser.id))} 
           onUpdateStatus={async (id, status) => {
-            const { error } = await supabase.from('leads').update({ status }).eq('id', id);
-            if (!error) await fetchLeads();
+            await supabase.from('leads').update({ status }).eq('id', parseInt(id));
+            await fetchLeads();
           }} 
           allOrders={orders} 
         />
@@ -330,28 +278,40 @@ const App: React.FC = () => {
           leads={leads} 
           orders={orders} 
           onAddModerator={async (m) => {
-            const { data, error } = await supabase.from('moderators').insert([{
+            const { error } = await supabase.from('moderators').insert([{
               name: m.name,
               email: m.email,
               password: m.password,
               role: m.role,
               is_active: true
-            }]).select();
+            }]);
             if (error) { alert(error.message); return false; }
             await fetchModerators();
             return true;
           }} 
           onDeleteModerator={async (id) => {
-            await supabase.from('moderators').delete().eq('id', id);
+            await supabase.from('moderators').delete().eq('id', parseInt(id));
             await fetchModerators();
           }} 
           onToggleStatus={async (id, active) => {
-            await supabase.from('moderators').update({ is_active: active }).eq('id', id);
+            await supabase.from('moderators').update({ is_active: active }).eq('id', parseInt(id));
             await fetchModerators();
           }} 
         />
       )}
-      {activeTab === 'products' && isAdmin && <ProductManager products={products} currentUser={currentUser} onAddProduct={() => {}} onUpdateProduct={() => {}} onDeleteProduct={() => {}} />}
+      {activeTab === 'products' && isAdmin && <ProductManager products={products} currentUser={currentUser} onAddProduct={async (p) => {
+        await supabase.from('products').insert([{sku: p.sku, name: p.name, price: p.price, stock: p.stock}]);
+        const { data } = await supabase.from('products').select('*');
+        if(data) setProducts(data.map((item: any) => ({...item, id: String(item.id), businessId: 'system'})));
+      }} onUpdateProduct={async (p) => {
+        await supabase.from('products').update({sku: p.sku, name: p.name, price: p.price, stock: p.stock}).eq('id', parseInt(p.id));
+        const { data } = await supabase.from('products').select('*');
+        if(data) setProducts(data.map((item: any) => ({...item, id: String(item.id), businessId: 'system'})));
+      }} onDeleteProduct={async (id) => {
+        await supabase.from('products').delete().eq('id', parseInt(id));
+        const { data } = await supabase.from('products').select('*');
+        if(data) setProducts(data.map((item: any) => ({...item, id: String(item.id), businessId: 'system'})));
+      }} />}
       {activeTab === 'settings' && isAdmin && <Settings config={courierConfig} onSave={handleSaveSettings} onUpdateLogo={handleUpdateLogo} logoUrl={logoUrl} />}
     </Layout>
   );

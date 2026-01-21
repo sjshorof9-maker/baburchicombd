@@ -47,7 +47,8 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
     if (cleaned.startsWith('880')) cleaned = cleaned.substring(3);
     else if (cleaned.startsWith('88')) cleaned = cleaned.substring(2);
     if (cleaned.length === 10) cleaned = '0' + cleaned;
-    return cleaned;
+    if (cleaned.length === 11 && cleaned.startsWith('0')) return cleaned;
+    return cleaned.length >= 10 ? cleaned : "";
   };
 
   const showToast = (msg: string) => {
@@ -55,7 +56,16 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
     setTimeout(() => setSuccessMsg(null), 4000);
   };
 
-  // Improved Registry to identify moderators
+  const getValueByFlexibleKey = (row: any, searchKeys: string[]) => {
+    const keys = Object.keys(row);
+    for (const searchKey of searchKeys) {
+      const normalizedSearch = searchKey.toLowerCase().replace(/[\s_]/g, '');
+      const foundKey = keys.find(k => k.toLowerCase().replace(/[\s_]/g, '') === normalizedSearch);
+      if (foundKey && row[foundKey]) return row[foundKey];
+    }
+    return "";
+  };
+
   const contacts = useMemo(() => {
     const contactMap: Record<string, EnrichedContact> = {};
     const now = new Date();
@@ -73,7 +83,6 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
           currentStatus: l.status, moderatorId: l.moderatorId
         };
       } else {
-        // If lead already exists, update moderator and status
         contactMap[phone].moderatorId = l.moderatorId;
         contactMap[phone].currentStatus = l.status;
         contactMap[phone].leadId = l.id;
@@ -135,7 +144,6 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
       alert("⚠️ Valid S.N. Range দিন!");
       return;
     }
-    
     const rangeContacts = filteredContacts.slice(start - 1, end);
     const rangePhones = rangeContacts.map(c => c.phone);
     setStrategicSelectedPhones(rangePhones);
@@ -175,10 +183,8 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
       if (newLeadsToCreate.length > 0) {
         await onAssignLeads(newLeadsToCreate);
       }
-      
-      const modName = moderators.find(m => m.id === selectedModId)?.name || 'Agent';
+      const modName = moderators.find(m => String(m.id) === String(selectedModId))?.name || 'Agent';
       showToast(`🎯 ${strategicSelectedPhones.length} লিড ${modName}-কে দেওয়া হয়েছে!`);
-      
       setStrategicSelectedPhones([]);
       setRangeStart('');
       setRangeEnd('');
@@ -193,40 +199,64 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
     const file = e.target.files?.[0];
     if (!file) return;
     setIsProcessing(true);
-    if (file.name.endsWith('.csv')) {
-      Papa.parse(file, {
-        header: true,
-        complete: (results) => {
-          processRawLeads(results.data);
-          setIsProcessing(false);
-        }
-      });
-    } else {
-      const reader = new FileReader();
-      reader.onload = (evt) => {
+    
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
         const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
-        const wsname = wb.SheetNames[0];
-        const ws = wb.Sheets[wsname];
-        const data = XLSX.utils.sheet_to_json(ws);
+        let data: any[] = [];
+        
+        if (file.name.endsWith('.csv')) {
+          const results = Papa.parse(bstr as string, { header: true, skipEmptyLines: true });
+          data = results.data;
+        } else {
+          const wb = XLSX.read(bstr, { type: 'binary' });
+          const wsname = wb.SheetNames[0];
+          const ws = wb.Sheets[wsname];
+          data = XLSX.utils.sheet_to_json(ws);
+        }
+        
         processRawLeads(data);
+      } catch (err) {
+        console.error("File Read Error:", err);
+        alert("Error reading file. Please check format.");
+      } finally {
         setIsProcessing(false);
-      };
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+    };
+
+    if (file.name.endsWith('.csv')) {
+      reader.readAsText(file);
+    } else {
       reader.readAsBinaryString(file);
     }
   };
 
   const processRawLeads = (data: any[]) => {
+    if (!Array.isArray(data) || data.length === 0) {
+      alert("No data found in file.");
+      return;
+    }
+
     const newLeads: Lead[] = data.map((row, idx) => {
-      const phone = cleanPhoneNumber(row.phone || row.Phone || row.mobile || row.Mobile || row.Number);
+      // Find phone using multiple potential header names including 'Recipient Phone'
+      const phoneRaw = getValueByFlexibleKey(row, ['phone', 'mobile', 'number', 'contact', 'recipientphone', 'customerphone', 'phone_number']);
+      const phone = cleanPhoneNumber(phoneRaw);
+      
       if (!phone) return null;
+
+      // Find name and address including 'Recipient Name' and 'Recipient Address'
+      const name = getValueByFlexibleKey(row, ['name', 'customer', 'customername', 'fullname', 'recipientname', 'receivername']);
+      const address = getValueByFlexibleKey(row, ['address', 'location', 'fulladdress', 'recipientaddress', 'receiveraddress']);
+
       return {
         id: `upl-${Date.now()}-${idx}`,
         businessId: 'system',
         phoneNumber: phone,
-        customerName: row.name || row.Name || '',
-        address: row.address || row.Address || '',
-        moderatorId: '',
+        customerName: String(name || 'Prospect').trim(),
+        address: String(address || '').trim(),
+        moderatorId: '', 
         status: 'pending' as LeadStatus,
         assignedDate: '',
         createdAt: new Date().toISOString()
@@ -235,9 +265,10 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
 
     if (newLeads.length > 0) {
       onAssignLeads(newLeads);
-      showToast(`${newLeads.length} টি নতুন লিড সিস্টেমে যোগ হয়েছে!`);
+      showToast(`${newLeads.length} টি লিড সফলভাবে সিস্টেমে যোগ হয়েছে!`);
+    } else {
+      alert("⚠️ ফাইল থেকে কোনো ভ্যালিড ডাটা পাওয়া যায়নি। নিশ্চিত করুন আপনার এক্সেল শিটে 'Recipient Phone' বা 'Phone' হেডার আছে।");
     }
-    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   return (
@@ -255,8 +286,13 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
         </div>
         <div className="flex gap-4">
            <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" accept=".csv,.xlsx,.xls" />
-           <button onClick={() => fileInputRef.current?.click()} className="px-8 py-4 bg-white border border-slate-200 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-sm hover:bg-slate-50 transition-all">
-             📁 Bulk Import Leads
+           <button 
+             onClick={() => fileInputRef.current?.click()} 
+             disabled={isProcessing}
+             className="px-8 py-4 bg-white border border-slate-200 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-sm hover:bg-slate-50 transition-all flex items-center gap-2"
+           >
+             {isProcessing ? <div className="w-3 h-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div> : '📁'} 
+             Bulk Import Leads
            </button>
         </div>
       </div>
@@ -313,9 +349,9 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
         <div className="lg:col-span-3 space-y-6">
            <div className="bg-white p-6 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col md:flex-row gap-4 items-center">
               <input type="text" placeholder="Search Identity (Name or Phone)..." value={searchPhone} onChange={(e) => setSearchPhone(e.target.value)} className="flex-1 px-8 py-5 bg-slate-50 border border-slate-200 rounded-[2.5rem] text-[11px] font-black outline-none focus:ring-4 focus:ring-indigo-500/5 transition-all"/>
-              <div className="flex bg-slate-100 p-2 rounded-[2rem] border border-slate-200">
+              <div className="flex bg-slate-100 p-2 rounded-[2rem] border border-slate-200 overflow-x-auto">
                 {['all', 'unassigned', 'pending', 'confirmed'].map(stat => (
-                  <button key={stat} onClick={() => setStatusFilter(stat as any)} className={`px-6 py-3 rounded-2xl text-[9px] font-black uppercase transition-all tracking-widest ${statusFilter === stat ? 'bg-white text-slate-900 shadow-xl' : 'text-slate-400'}`}>{stat}</button>
+                  <button key={stat} onClick={() => setStatusFilter(stat as any)} className={`px-6 py-3 rounded-2xl text-[9px] font-black uppercase transition-all tracking-widest whitespace-nowrap ${statusFilter === stat ? 'bg-white text-slate-900 shadow-xl' : 'text-slate-400'}`}>{stat}</button>
                 ))}
               </div>
            </div>
@@ -360,8 +396,8 @@ const LeadManager: React.FC<LeadManagerProps> = ({ moderators, leads, orders, on
                             </td>
                             <td className="px-10 py-8">
                                <div className="flex items-center gap-2">
-                                  <div className={`w-2 h-2 rounded-full ${contact.moderatorId ? 'bg-indigo-500' : 'bg-slate-200'}`}></div>
-                                  <p className={`text-[11px] font-black uppercase tracking-widest ${contact.moderatorId ? 'text-indigo-600' : 'text-slate-400 italic'}`}>{modName}</p>
+                                  <div className={`w-2 h-2 rounded-full ${contact.moderatorId && contact.moderatorId !== 'null' ? 'bg-indigo-500' : 'bg-slate-200'}`}></div>
+                                  <p className={`text-[11px] font-black uppercase tracking-widest ${contact.moderatorId && contact.moderatorId !== 'null' ? 'text-indigo-600' : 'text-slate-400 italic'}`}>{modName}</p>
                                </div>
                             </td>
                             <td className="px-10 py-8 text-right">
